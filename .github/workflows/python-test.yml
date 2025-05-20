@@ -1,0 +1,102 @@
+name: Python Multi-Version and OS Test
+
+on:
+  push:
+    branches: [ main, master ]
+  pull_request:
+    branches: [ main, master ]
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+        python-version: ['3.8', '3.9.13', '3.10.11', '3.11.9']
+
+    steps:
+    - uses: actions/checkout@v3
+    
+    - name: Set up Python ${{ matrix.python-version }}
+      uses: actions/setup-python@v4
+      with:
+        python-version: ${{ matrix.python-version }}
+    
+    - name: Install dependencies (Linux/macOS)
+      if: runner.os != 'Windows'
+      run: |
+        python -m pip install --upgrade pip
+        if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
+      
+    - name: Install dependencies (Windows)
+      if: runner.os == 'Windows'
+      run: |
+        python -m pip install --upgrade pip
+        if (Test-Path -Path "requirements.txt") { pip install -r requirements.txt }
+      
+    - name: Run main.py
+      run: python main.py
+      
+    - name: Upload JSON result
+      uses: actions/upload-artifact@v4
+      with:
+        name: OS_${{ matrix.os }}_PYTHON_${{ matrix.python-version }}_result
+        path: OS_*_PYTHON_*.json
+        if-no-files-found: warn
+        
+  consolidate-and-commit:
+    needs: test
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v3
+      
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.10'
+      
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: ./artifacts
+          
+      - name: Prepare directory structure
+        run: |
+          # Create results directory
+          mkdir -p results
+          
+          # Extract all JSON files from artifacts to working directory
+          find artifacts -name "OS_*.json" -exec cp {} ./ \;
+          
+          # List the files
+          echo "Files in current directory:"
+          ls -la
+          
+      - name: Run comparison.py to generate report
+        run: |
+          # Run the comparison script to generate the report
+          python comparison.py
+          
+          # Move all artifacts and generated files to results directory
+          cp -f OS_*.json results/
+          cp -f comparison_report.html results/
+          cp -f comparison_results.json results/
+          
+          # List the results
+          echo "Files in results directory:"
+          ls -la results/
+          
+      - name: Configure Git
+        run: |
+          git config --local user.email "action@github.com"
+          git config --local user.name "GitHub Action"
+          
+      - name: Commit files
+        run: |
+          git add results/
+          git commit -m "Add consolidated test results" || echo "No changes to commit"
+          git push 
